@@ -28,35 +28,24 @@
          handle_info/2, terminate/2, code_change/3]).
 
 %% api callbacks
--export([start_link/0, start_link/3, send/1, send/2, send/3]).
+-export([start_link/0, send/3, send/4, to_stdout/1]).
 
--record(state, {socket, address, port}).
+-record(state, {socket, address, port, to_stdout=false}).
 
 %%====================================================================
 %% api callbacks
 %%====================================================================
 start_link() ->
-    {ok, Host} = inet:gethostname(),
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [Host, 514], []).
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-start_link(Name, Host, Port) when is_atom(Name), is_list(Host), is_integer(Port) ->
-    gen_server:start_link({local, Name}, ?MODULE, [Host, Port], []).
-
-send(Msg) when is_list(Msg) ->
-    send(?MODULE, Msg, []).
-
-send(Msg, Opts) when is_list(Msg), is_list(Opts) ->
-    send(?MODULE, Msg, Opts);
-
-send(Name, Msg) when is_atom(Name), is_list(Msg) ->
-    send(Name, Msg, []).
-
-send(Name, Msg, Opts) when is_atom(Name), is_list(Msg), is_list(Opts) ->
-    Level = get_level(Opts),
-    Ident = get_ident(Opts),
-    Pid = get_pid(Opts),
-    Packet = ["<", Level, "> ", Ident, "[", Pid, "]: ", Msg, "\n"],
-    gen_server:cast(Name, {send, iolist_to_binary(Packet)}).
+send(Who, Level, Msg) when is_atom(Who), is_atom(Level), is_list(Msg) ->
+    gen_server:cast(?MODULE, {send, Who, Level, Msg}).
+    
+send(Facility, Who, Level, Msg) when is_integer(Facility), is_atom(Who), is_atom(Level), is_list(Msg) ->
+    gen_server:cast(?MODULE, {send, Facility, Who, Level, Msg}).
+    
+to_stdout(Bool) when is_boolean(Bool) ->
+    gen_server:call(?MODULE, {to_stdout, Bool}).
 
 %%====================================================================
 %% gen_server callbacks
@@ -69,17 +58,16 @@ send(Name, Msg, Opts) when is_atom(Name), is_list(Msg), is_list(Opts) ->
 %%                         {stop, Reason}
 %% Description: Initiates the server
 %%--------------------------------------------------------------------
-init([Host, Port]) ->
-    {ok, Addr} = inet:getaddr(Host, inet),
+init([]) ->
     case gen_udp:open(0) of
-        {ok, Socket} ->
+        {ok, Socket} -> 
+            {ok, Hostname} = inet:gethostname(),
             {ok, #state{
                     socket = Socket,
-                    address = Addr,
-                    port = Port
+                    address = Hostname,
+                    port = 514
             }};
-        {error, Reason} ->
-            {stop, Reason}
+        {error, Reason} -> {stop, Reason}
     end.
 
 %%--------------------------------------------------------------------
@@ -91,8 +79,11 @@ init([Host, Port]) ->
 %%                                      {stop, Reason, State}
 %% Description: Handling call messages
 %%--------------------------------------------------------------------
+handle_call({to_stdout, Bool}, _From, State) ->
+    {reply, ok, State#state{to_stdout=Bool}};
+
 handle_call(_Msg, _From, State) ->
-    {reply, invalid_msg, State}.
+    {reply, ok, State}.
 
 %%--------------------------------------------------------------------
 %% Function: handle_cast(Msg, State) -> {noreply, State} |
@@ -100,11 +91,23 @@ handle_call(_Msg, _From, State) ->
 %%                                      {stop, Reason, State}
 %% Description: Handling cast messages
 %%--------------------------------------------------------------------
-handle_cast({send, Packet}, #state{socket=Socket, address=Address, port=Port}=State) when is_binary(Packet) ->
-    gen_udp:send(Socket, Address, Port, Packet),
+handle_cast(Message, #state{to_stdout=true}=State) ->
+    {Who, Level, Msg} =
+        case Message of
+            {send, W, L, M} -> {W, L, M};
+            {send, _F, W, L, M} -> {W, L, M}
+        end,
+    io:format("[~p] [~p] ~s~n", [Who, Level, Msg]),
     {noreply, State};
 
-handle_cast(_Msg, State) ->
+handle_cast({send, Who, Level, Msg}, State) ->
+    Packet = ["<", atom_to_level(Level)+48, "> ", atom_to_list(Who), ": ", Msg, "\n"],
+    do_send(State, Packet),
+    {noreply, State};
+
+handle_cast({send, Facility, Who, Level, Msg}, State) ->
+    Packet = ["<", integer_to_list((Facility * 8) + atom_to_level(Level)), "> ", atom_to_list(Who), ": ", Msg, "\n"],
+    do_send(State, Packet),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -136,25 +139,8 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-get_level(Opts) ->
-    Facility = proplists:get_value(facility, Opts, 1),
-    Level = atom_to_level(proplists:get_value(level, Opts)),
-    integer_to_list((Facility * 8) + Level).
-
-get_ident(Opts) ->
-    case proplists:get_value(ident, Opts) of
-        Atom when is_atom(Atom) -> atom_to_list(Atom);
-        List when is_list(List) -> List;
-        Binary when is_binary(Binary) -> Binary
-    end.
-
-get_pid(Opts) ->
-    case proplists:get_value(pid, Opts) of
-        undefined -> os:getpid();
-        Atom when is_atom(Atom) -> atom_to_list(Atom);
-        List when is_list(List) -> List;
-        Binary when is_binary(Binary) -> Binary
-    end.
+do_send(#state{socket=Socket, address=Address, port=Port}, Packet) ->
+    gen_udp:send(Socket, Address, Port, Packet).
     
 atom_to_level(emergency) -> 0; % system is unusable 
 atom_to_level(alert) -> 1; % action must be taken immediately 
@@ -163,5 +149,4 @@ atom_to_level(error) -> 3; % error conditions
 atom_to_level(warning) -> 4; % warning conditions 
 atom_to_level(notice) -> 5; % normal but significant condition 
 atom_to_level(info) -> 6; % informational
-atom_to_level(debug) -> 7; % debug-level messages
-atom_to_level(_) -> atom_to_level(info). % default to info
+atom_to_level(debug) -> 7. % debug-level messages

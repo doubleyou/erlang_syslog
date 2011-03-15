@@ -3,5 +3,6 @@
     {vsn, "1.0"},
     {modules, [syslog, syslog_transform]},
     {applications, [kernel, stdlib]},
-    {registered, []}
+    {registered, []},
+    {mod, {syslog_app, []}}
 ]}.
