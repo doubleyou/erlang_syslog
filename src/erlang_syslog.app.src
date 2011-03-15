@@ -1,4 +1,4 @@
-{application, syslog, [
+{application, erlang_syslog, [
     {description, "Erlang syslog client"},
     {vsn, "1.0"},
     {modules, [syslog, syslog_transform]},

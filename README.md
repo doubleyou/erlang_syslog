@@ -9,7 +9,7 @@ Ensure that syslogd has udp sockets enabled:
     
 ### Log
 
-    0> application:start(syslog).
+    0> application:start(erlang_syslog).
     ok
     1> syslog:send(wombat, info, "happy").
     ok

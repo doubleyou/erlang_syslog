@@ -1,7 +1,5 @@
-all: emake
-
-emake:
-	erl -make
+all:
+	./rebar compile
 
 clean:
-	rm -f ebin/*.beam erl_crash.dump
+	./rebar clean
